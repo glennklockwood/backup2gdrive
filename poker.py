@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
-import pprint
+import os
+import tarfile
+import datetime
 import pickle
-import os.path
+
 import googleapiclient.discovery
+import googleapiclient.http
 import google_auth_oauthlib.flow
 import google.auth.transport.requests
 
-import googleapiclient.http
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
+
+def filter_mud_tarfile(tarinfo):
+    basename = os.path.basename(tarinfo.name)
+    if tarinfo.name.endswith('.o') \
+    or os.sep + ".git" in tarinfo.name \
+    or basename == "rom" \
+    or basename == "core" \
+    or basename.startswith("core.") \
+    or basename.endswith(".log") \
+    or basename.endswith(".bak"):
+        return None
+    return tarinfo
 
 def get_credentials(client_secrets_file='credentials.json', token_file='token.pickle', scopes=SCOPES):
     creds = None
@@ -36,6 +50,10 @@ def find_matching_folders(service, folder_name):
     query_str = "mimeType='application/vnd.google-apps.folder' and name='%s' and trashed = false" % folder_name
     return query_files(service, query_str)
 
+def find_files_in_folder(service, folder_id):
+    query_str = "parents in '%s' and trashed = false" % folder_id
+    return query_files(service, query_str)
+
 def query_files(service, query_str):
     page_token = None
     matches = []
@@ -52,6 +70,28 @@ def query_files(service, query_str):
         if page_token is None:
             break
     return matches
+
+def upload_file(service, local_file_path, parent_folder_id=None):
+    body = {
+        "name": os.path.basename(local_file_path),
+        "mimeType": "application/octet-stream",
+    }
+    if parent_folder_id:
+        body["parents"] = [parent_folder_id]
+
+    # upload the file to the directory
+    results = service.files().create(
+        body=body,
+        media_body=local_file,
+        fields='id').execute()
+
+    return results
+
+def tar_directory(input_dir, output_file):
+
+    with tarfile.open(output_file, "w:xz") as tar:
+        tar.add(input_dir, filter=filter_mud_tarfile )
+        
 
 def main():
     """Shows basic usage of the Drive v3 API.
@@ -80,16 +120,14 @@ def main():
         parent_folder_id = backup_dirs[0].get('id')
         print("Found existing backup directory %s" % parent_folder_id)
 
-    # upload the file to the directory
-    results = service.files().create(body={
-            "name": os.path.basename(local_file),
-            "parents": [parent_folder_id],
-            "mimeType": "application/octet-stream",
-        },
-        media_body=local_file,
-        fields='id').execute()
+    old_files = find_files_in_folder(service, parent_folder_id)
+    print(old_files)
 
-    print("Uploaded %s as file id %s" % (local_file, results.get("id")))
+    output_file = datetime.datetime.now().strftime("mud_1316_%Y-%m-%d.tar.xz")
+    tar_directory('1316', output_file)
+
+#   results = upload_file(service, local_file, parent_folder_id)
+#   print("Uploaded %s as file id %s" % (local_file, results.get("id")))
 
 if __name__ == '__main__':
     main()
