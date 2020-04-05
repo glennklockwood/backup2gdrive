@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
+"""Creates and uploads backups of the different MUD ports to Google Drive.
+
+See <https://developers.google.com/drive/api/v3/reference/files/> for
+information on this API.
+"""
 import os
 import tarfile
+import argparse
 import datetime
 import pickle
 
@@ -8,7 +14,6 @@ import googleapiclient.discovery
 import googleapiclient.http
 import google_auth_oauthlib.flow
 import google.auth.transport.requests
-
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 BACKUP_DIR = "Mud Backups"
@@ -25,7 +30,7 @@ def filter_mud_tarfile(tarinfo):
         return None
     return tarinfo
 
-def get_credentials(client_secrets_file='credentials.json', token_file='token.pickle', scopes=SCOPES):
+def get_credentials(client_secrets_file, token_file, scopes=SCOPES):
     creds = None
     if os.path.exists(token_file):
         with open(token_file, 'rb') as token:
@@ -118,23 +123,36 @@ def tar_directory(input_dir, output_file):
     with tarfile.open(output_file, "w:xz") as tar:
         tar.add(input_dir, filter=filter_mud_tarfile )
 
-def main():
+def main(argv=None):
     """Shows basic usage of the Drive v3 API.
     Prints the names and ids of the first 10 files the user has access to.
     """
-    backup_dir = BACKUP_DIR
 
-    creds = get_credentials()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--backup-prefix", type=str, default=None, help="Prefix for backup file names")
+    parser.add_argument("-k", "--keep-old", type=int, default=4, help="Number of old backups to keep on GDrive with the same --backup-prefix")
+    parser.add_argument("--token-file", type=str, default='token.pickle', help="Path to cached GDrive API credentials (default: token.pickle)")
+    parser.add_argument("--client-secrets", type=str, default="credentials.json", help="Path to client secrets/credentials json (default: credentials.json)")
+    parser.add_argument("--backup-dir", type=str, default=BACKUP_DIR, help="Name of top-level subdirectory into which MUD backups should be stored on GDrive (default: %s)" % BACKUP_DIR)
+    parser.add_argument("directory", type=str, help="Directory to back up")
+    parser.add_argument("--dry-run", action='store_true', help="Do not actually create, upload, or delete any backups")
+    args = parser.parse_args(argv)
+
+    backup_prefix = args.backup_prefix
+    if not args.backup_prefix:
+        backup_prefix = os.path.basename(args.directory.rstrip(os.sep))
+
+    creds = get_credentials(client_secrets_file=args.client_secrets, token_file=args.token_file)
 
     service = googleapiclient.discovery.build('drive', 'v3', credentials=creds)
 
     # find the parent folder if it exists
-    backup_dirs = find_matching_folders(service, backup_dir)
+    backup_dirs = find_matching_folders(service, args.backup_dir)
 
     # make the parent folder if it does not exist
     if not backup_dirs:
         results = service.files().create(body={
-                "name": backup_dir,
+                "name": args.backup_dir,
                 "mimeType": "application/vnd.google-apps.folder"
             },
             fields="id").execute()
@@ -147,20 +165,27 @@ def main():
     # find old tarfiles
     old_files = find_files_in_folder(service, parent_folder_id)
     print("%d backup files already exist" % len(old_files))
-    delete_list = find_deletion_candidates(service, old_files, 'mud_1316_')
+    delete_list = find_deletion_candidates(service, old_files, '%s_' % backup_prefix)
     for delete_obj in delete_list:
         print("Deleting old backup %s created on %s" % (delete_obj.get('name'), delete_obj.get('createdTime')))
-    delete_files(service, delete_list, trash=False)
+    if not args.dry_run:
+        delete_files(service, delete_list, trash=False)
 
     # create backup tarfile
-    tarfile = datetime.datetime.now().strftime("mud_1316_%Y-%m-%d.tar.xz")
-    tar_directory('1316', tarfile)
+    tarfile = datetime.datetime.now().strftime("%s_%%Y-%%m-%%d.tar.xz" % backup_prefix)
+    if not args.dry_run:
+        tar_directory(args.directory, tarfile)
 
     # upload backup tarfile
-    results = upload_file(service, tarfile, parent_folder_id)
-    print("Uploaded %s as file id %s" % (tarfile, results.get("id")))
+    if not args.dry_run:
+        results = upload_file(service, tarfile, parent_folder_id)
+        print("Uploaded %s as file id %s" % (tarfile, results.get("id")))
+    else:
+        print("Uploaded %s" % (tarfile))
 
-    os.unlink(tarfile)
+    # don't keep local copy of tarfile
+    if not args.dry_run:
+        os.unlink(tarfile)
 
 if __name__ == '__main__':
     main()
