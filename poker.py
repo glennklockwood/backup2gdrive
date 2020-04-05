@@ -10,8 +10,8 @@ import google_auth_oauthlib.flow
 import google.auth.transport.requests
 
 
-# If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
+BACKUP_DIR = "Mud Backups"
 
 def filter_mud_tarfile(tarinfo):
     basename = os.path.basename(tarinfo.name)
@@ -54,6 +54,32 @@ def find_files_in_folder(service, folder_id):
     query_str = "parents in '%s' and trashed = false" % folder_id
     return query_files(service, query_str)
 
+def find_deletion_candidates(service, file_list, filename_prefix, max_keep=4):
+    matching_files = []
+    for file_entry in file_list:
+        if file_entry.get('name').startswith(filename_prefix):
+            matching_files.append(file_entry)
+
+    if len(matching_files) <= max_keep:
+        return []
+    return matching_files[:-max_keep]
+
+def delete_files(service, file_list, trash=True):
+    """Deletes files
+    Args:
+        trash (bool): Moves file into trash rather than permanently deleting
+            unless trash=False
+    """
+    deleted = []
+    for file_entry in file_list:
+        if trash:
+            service.files().update(
+                fileId=file_entry.get('id'),
+                body={"trashed": True}).execute()
+        else:
+            service.files().delete(
+                fileId=file_entry.get('id'))
+
 def query_files(service, query_str):
     page_token = None
     matches = []
@@ -62,8 +88,9 @@ def query_files(service, query_str):
         results = service.files().list(
             q=query_str,
             spaces='drive',
-            fields='nextPageToken, files(id, name)',
-            pageToken=page_token).execute()
+            fields='nextPageToken, files(id, name, createdTime)',
+            pageToken=page_token,
+            orderBy="createdTime").execute()
         for filename in results.get('files', []):
             matches.append(filename)
         page_token = results.get('nextPageToken')
@@ -82,23 +109,20 @@ def upload_file(service, local_file_path, parent_folder_id=None):
     # upload the file to the directory
     results = service.files().create(
         body=body,
-        media_body=local_file,
+        media_body=local_file_path,
         fields='id').execute()
 
     return results
 
 def tar_directory(input_dir, output_file):
-
     with tarfile.open(output_file, "w:xz") as tar:
         tar.add(input_dir, filter=filter_mud_tarfile )
-        
 
 def main():
     """Shows basic usage of the Drive v3 API.
     Prints the names and ids of the first 10 files the user has access to.
     """
-    local_file = "testfile.bin"
-    backup_dir = "Mud Backups"
+    backup_dir = BACKUP_DIR
 
     creds = get_credentials()
 
@@ -120,14 +144,23 @@ def main():
         parent_folder_id = backup_dirs[0].get('id')
         print("Found existing backup directory %s" % parent_folder_id)
 
+    # find old tarfiles
     old_files = find_files_in_folder(service, parent_folder_id)
-    print(old_files)
+    print("%d backup files already exist" % len(old_files))
+    delete_list = find_deletion_candidates(service, old_files, 'mud_1316_')
+    for delete_obj in delete_list:
+        print("Deleting old backup %s created on %s" % (delete_obj.get('name'), delete_obj.get('createdTime')))
+    delete_files(service, delete_list, trash=False)
 
-    output_file = datetime.datetime.now().strftime("mud_1316_%Y-%m-%d.tar.xz")
-    tar_directory('1316', output_file)
+    # create backup tarfile
+    tarfile = datetime.datetime.now().strftime("mud_1316_%Y-%m-%d.tar.xz")
+    tar_directory('1316', tarfile)
 
-#   results = upload_file(service, local_file, parent_folder_id)
-#   print("Uploaded %s as file id %s" % (local_file, results.get("id")))
+    # upload backup tarfile
+    results = upload_file(service, tarfile, parent_folder_id)
+    print("Uploaded %s as file id %s" % (tarfile, results.get("id")))
+
+    os.unlink(tarfile)
 
 if __name__ == '__main__':
     main()
