@@ -1,5 +1,15 @@
-Getting started:
+## Installation
+
+You'll need `credentials.json` from your Google account.  You can get this
+by enabling the Google Drive API on your account.  Follow the
+[Google Drive API v3 Quickstart][].
 
     python3 -m venv $PWD/google-api
     source google-api/bin/activate
     pip install -r requirements.txt 
+
+[Google Drive API v3 Quickstart]: https://developers.google.com/drive/api/v3/quickstart/python
+
+## Usage
+
+    ./run_backups.sh
