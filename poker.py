@@ -33,7 +33,7 @@ def get_credentials(client_secrets_file='credentials.json', token_file='token.pi
     return creds
 
 def find_matching_folders(service, folder_name):
-    query_str = "mimeType='application/vnd.google-apps.folder' and name='%s' and trashed = false" % folder_name,
+    query_str = "mimeType='application/vnd.google-apps.folder' and name='%s' and trashed = false" % folder_name
     return query_files(service, query_str)
 
 def query_files(service, query_str):
