@@ -83,7 +83,7 @@ def delete_files(service, file_list, trash=True):
                 body={"trashed": True}).execute()
         else:
             service.files().delete(
-                fileId=file_entry.get('id'))
+                fileId=file_entry.get('id')).execute()
 
 def query_files(service, query_str):
     page_token = None
@@ -164,7 +164,6 @@ def main(argv=None):
 
     # find old tarfiles
     old_files = find_files_in_folder(service, parent_folder_id)
-    print("%d backup files already exist" % len(old_files))
     delete_list = find_deletion_candidates(service, old_files, '%s_' % backup_prefix)
     for delete_obj in delete_list:
         print("Deleting old backup %s created on %s" % (delete_obj.get('name'), delete_obj.get('createdTime')))
