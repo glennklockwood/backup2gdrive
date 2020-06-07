@@ -13,3 +13,17 @@ by enabling the Google Drive API on your account.  Follow the
 ## Usage
 
     ./run_backups.sh
+
+## Testing
+
+To test the `backup_mud.py` script, just pass it a non-production backup folder
+name:
+
+    ./backup_mud.py --token-file ./token.pickle \
+            --client-secrets ./credentials.json \
+            --backup-dir "testdir" \
+            --backup-prefix "mud_1316" \
+            --keep-old 3 \
+            $HOME/1316
+
+You will still have to `source google-api/bin/activate` first.
