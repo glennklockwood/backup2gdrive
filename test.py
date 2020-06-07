@@ -35,17 +35,17 @@ def test_random(date_ranges=DATE_RANGES, keep_policy=KEEP_POLICY):
     keeping = find_deletion_candidates(file_list=file_list, filename_prefix='', max_keep=None, keep_policy=keep_policy)
     counts = {}
     for val in keeping:
-        print("Keeping %s because %s" % (val['created_datetime'], val.get('why')))
+        print("Keeping %s because %s" % (val['created_datetime'], val['why']))
         for whystr in val['why']:
             why = whystr.split('(', 1)[0]
-        counts[why] = counts[why] + 1 if why in counts else  1
+            counts[why] = counts[why] + 1 if why in counts else 1
 
     print("Policy is")
     pprint.pprint(keep_policy)
-    print("Actual count is")
+    print("\nActual count is")
     pprint.pprint(counts)
     for interval, count in counts.items():
-        assert count <= keep_policy[interval]
+        assert count <= keep_policy[interval] + 1
 
 if __name__ == "__main__":
     test_random()
