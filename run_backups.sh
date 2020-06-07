@@ -19,5 +19,11 @@ do
 	--client-secrets "${HERE}/credentials.json" \
 	--backup-dir "Mud Backups" \
 	--backup-prefix "mud_${port}" \
+	--keep-policy-days 7 \
+	--keep-policy-weeks 4 \
+	--keep-policy-months 12 \
+	--keep-policy-years 100 \
 	${port} | gawk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }' >> "${HERE}/backups.log"
+
+    	# old policy was --keep-old 4
 done
