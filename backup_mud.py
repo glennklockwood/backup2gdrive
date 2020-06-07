@@ -78,8 +78,9 @@ def find_deletion_candidates(file_list, filename_prefix, max_keep=None, keep_pol
             old.  When multiple keys are specified, policies are additive; for
             example, ``keep_policy={'years': 5, 'months': 12}`` will keep one
             backup from each of the last five years __AND__ one backup from each
-            of the last twelve months.  This parameter does nothing if
-            ``max_keep`` is specified.
+            of the last twelve months.  Note that this may result in six years
+            and thirteen months of backups since the current month may also be
+            included.  This parameter does nothing if ``max_keep`` is specified.
 
     Returns:
         list of the same type as ``file_list`` containing all the elements of
@@ -130,7 +131,7 @@ def find_deletion_candidates(file_list, filename_prefix, max_keep=None, keep_pol
             continue
 
         for interval in _keep_policy:
-            if created.year not in grouped_by_time[interval]:
+            if date_component(created, interval) not in grouped_by_time[interval]:
                 grouped_by_time[interval][date_component(created, interval)] = []
             grouped_by_time[interval][date_component(created, interval)].append(matching_file)
 
@@ -149,6 +150,8 @@ def find_deletion_candidates(file_list, filename_prefix, max_keep=None, keep_pol
                 why = "%s(cutoff=%s)" % (interval, str(window_start))
                 keep_file['why'] = keep_file['why'] + [why] if 'why' in keep_file else [why]
                 keep[keep_file.get('id')] = keep_file
+            #else:
+            #    print("Rejecting %s because of %s (%s <= %s)" % (keep_file['id'], interval, keep_file['created_datetime'], window_start))
 
     return sorted(keep.values(), key=lambda x: x.get('created_datetime'), reverse=True)
 
@@ -245,8 +248,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--backup-prefix", type=str, default=None,
         help="Prefix for backup file names")
-    parser.add_argument("-k", "--keep-old", type=int, default=4,
-        help="Number of old backups to keep on GDrive with the same --backup-prefix")
     parser.add_argument("--token-file", type=str, default='token.pickle',
         help="Path to cached GDrive API credentials (default: token.pickle)")
     parser.add_argument("--client-secrets", type=str, default="credentials.json",
@@ -257,7 +258,39 @@ def main(argv=None):
         help="Directory to back up")
     parser.add_argument("--dry-run", action='store_true',
         help="Do not actually create, upload, or delete any backups")
+
+    # retention policy
+    parser.add_argument("-k", "--keep-old", type=int, default=None,
+            help="Number of old backups to keep on GDrive with the same --backup-prefix (default: 4)")
+    parser.add_argument("--keep-policy-days", type=int, default=0,
+        help="Number of previous days to keep backed up (default: 0)")
+    parser.add_argument("--keep-policy-weeks", type=int, default=0,
+        help="Number of previous weeks to keep backed up (default: 0)")
+    parser.add_argument("--keep-policy-months", type=int, default=0,
+        help="Number of previous months to keep backed up (default: 0)")
+    parser.add_argument("--keep-policy-years", type=int, default=0,
+        help="Number of previous years to keep backed up (default: 0)")
+
     args = parser.parse_args(argv)
+
+    keep_old = args.keep_old
+    keep_policy = None
+    if (args.keep_policy_days or args.keep_policy_weeks or args.keep_policy_months or args.keep_policy_years):
+        if keep_old:
+            parser.error("--keep-old and --keep-policy cannot be used together")
+        keep_policy = {
+            "days": args.keep_policy_days,
+            "weeks": args.keep_policy_weeks,
+            "months": args.keep_policy_months,
+            "years": args.keep_policy_years,
+        }
+        print("Using a policy of preserving %d days, %d weeks, %d months, and %d years" % (
+            keep_policy['days'],
+            keep_policy['weeks'],
+            keep_policy['months'],
+            keep_policy['years']))
+    elif not keep_old:
+        keep_old = 4
 
     backup_prefix = args.backup_prefix
     if not args.backup_prefix:
@@ -270,7 +303,7 @@ def main(argv=None):
 
     # find old tarfiles
     old_files = backup_maker.find_files_in_folder(parent_folder_id)
-    delete_list = find_deletion_candidates(old_files, '%s_' % backup_prefix, max_keep=args.keep_old)
+    delete_list = find_deletion_candidates(old_files, '%s_' % backup_prefix, max_keep=keep_old, keep_policy=keep_policy)
     if not args.dry_run:
         backup_maker.delete_files(delete_list, trash=False)
 
