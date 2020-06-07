@@ -8,8 +8,11 @@ import os
 import tarfile
 import argparse
 import datetime
+import collections
 import pickle
 
+import dateutil.parser
+import dateutil.relativedelta
 import googleapiclient.discovery
 import googleapiclient.http
 import google_auth_oauthlib.flow
@@ -55,15 +58,99 @@ def tar_directory(input_dir, output_file):
     with tarfile.open(output_file, "w:xz") as tar:
         tar.add(input_dir, filter=filter_mud_tarfile )
 
-def find_deletion_candidates(file_list, filename_prefix, max_keep=4):
+def find_deletion_candidates(file_list, filename_prefix, max_keep=None, keep_policy=None):
+    """Identifies files in backup that should be deleted.
+
+    Args:
+        file_list: Iterable with dict-like elements that contain the ``name``
+            (filename) key.  If using ``keep_policy``, should also contain the
+            ``createdTime`` key.
+        filename_prefix (str): Only consider file entries in ``file_list`` whose
+            ``name`` key begins with this string.
+        max_keep (int or None): When specified, keep only this many of the last
+            files in ``file_list``.  This implies that ``file_list`` is already
+            sorted in some meaningful way (e.g., from oldest to newest)
+        keep_policy (dict or None): When specified, should contain the keys
+            ``days``, ``weeks``, ``months``, and/or ``years`` whose values are
+            int that represent how many days/weeks/months/years should be
+            represented in backups.  For example, if
+            ``keep_policy={'years': 5}``, delete all backups more than 5 years
+            old.  When multiple keys are specified, policies are additive; for
+            example, ``keep_policy={'years': 5, 'months': 12}`` will keep one
+            backup from each of the last five years __AND__ one backup from each
+            of the last twelve months.  This parameter does nothing if
+            ``max_keep`` is specified.
+
+    Returns:
+        list of the same type as ``file_list`` containing all the elements of
+        ``file_list`` that should be deleted according to ``filename_prefix``,
+        ``max_keep``, and ``keep_policy``.
+    """
+    def date_component(dtobj, component):
+        if component == 'days':
+            return dtobj.toordinal()
+        if component == 'weeks':
+            return dtobj.toordinal() // 7
+        return getattr(dtobj, component[:-1])
+
     matching_files = []
     for file_entry in file_list:
         if file_entry.get('name').startswith(filename_prefix):
             matching_files.append(file_entry)
 
-    if len(matching_files) <= max_keep:
-        return []
-    return matching_files[:-max_keep]
+    # if max_keep, do not enforce a age-based retention policy and just bail here
+    if max_keep:
+        if len(matching_files) <= max_keep:
+            return []
+        return matching_files[:-max_keep]
+
+    for matching_file in matching_files:
+        if 'createdTime' in matching_file:
+            # datetime.datetime.fromisoformat(matching_file.get('createdTime').replace("Z", "+00:00")) # Python 3.7+ only
+            matching_file['created_datetime'] = dateutil.parser.isoparse(matching_file.get('createdTime'))
+
+    if keep_policy:
+        # order here matters - that way we are saving recent days before saving recent weeks
+        _keep_policy = collections.OrderedDict()
+        _keep_policy['days'] = keep_policy.get('days', 7) # keep up to 7 days of old logs
+        _keep_policy['weeks'] = keep_policy.get('weeks', 0) # keep up to 4 weeks of old logs
+        _keep_policy['months'] = keep_policy.get('months', 0) # keep up to 12 months of old logs
+        _keep_policy['years'] = keep_policy.get('years', 0) # keep up to five years of old logs
+    else:
+        raise RuntimeError("must specify max_keep or keep_policy")
+
+    grouped_by_time = {}
+    for interval in _keep_policy:
+        grouped_by_time[interval] = {}
+
+    # hash every file by its day
+    for matching_file in matching_files:
+        created = matching_file.get('created_datetime')
+        if not created:
+            continue
+
+        for interval in _keep_policy:
+            if created.year not in grouped_by_time[interval]:
+                grouped_by_time[interval][date_component(created, interval)] = []
+            grouped_by_time[interval][date_component(created, interval)].append(matching_file)
+
+    keep = {}
+    for interval in _keep_policy: # interval = year, month, week, ...
+        # **{interval: ...} is super hacky; safer thing to do is factor
+        # out into a function that properly converts valid ``interval`` values
+        # into proper dateutil.relativedelta.relativedelta() parameters
+        window_start = datetime.datetime.now(datetime.timezone.utc) \
+            - dateutil.relativedelta.relativedelta(**{interval: _keep_policy[interval]})
+
+        for key in sorted(grouped_by_time[interval], reverse=True): # key = 2019, 2018, 2017, ...
+            files_in_interval = sorted(grouped_by_time[interval][key], key=lambda x: x.get('created_datetime'), reverse=True)
+            keep_file = files_in_interval[0]
+            if keep_file['created_datetime'] > window_start:
+                why = "%s(cutoff=%s)" % (interval, str(window_start))
+                keep_file['why'] = keep_file['why'] + [why] if 'why' in keep_file else [why]
+                keep[keep_file.get('id')] = keep_file
+
+    return sorted(keep.values(), key=lambda x: x.get('created_datetime'), reverse=True)
 
 class BackerUpper(object):
     def __init__(self, client_secrets, token_file):
@@ -98,6 +185,9 @@ class BackerUpper(object):
     def delete_files(self, file_list, trash=True):
         """Deletes files
         Args:
+            file_list: Any iterable whose elements are dict-like and have the
+                ``id`` key defined.  Optionally, ``name`` and ``createdTime``
+                keys can also be defined.
             trash (bool): Moves file into trash rather than permanently deleting
                 unless trash=False
         """
