@@ -146,14 +146,17 @@ def find_deletion_candidates(file_list, filename_prefix, max_keep=None, keep_pol
         for key in sorted(grouped_by_time[interval], reverse=True): # key = 2019, 2018, 2017, ...
             files_in_interval = sorted(grouped_by_time[interval][key], key=lambda x: x.get('created_datetime'), reverse=True)
             keep_file = files_in_interval[0]
+            if keep_file.get('id') in keep:
+                continue
             if keep_file['created_datetime'] > window_start:
-                why = "%s(cutoff=%s)" % (interval, str(window_start))
-                keep_file['why'] = keep_file['why'] + [why] if 'why' in keep_file else [why]
                 keep[keep_file.get('id')] = keep_file
-            #else:
-            #    print("Rejecting %s because of %s (%s <= %s)" % (keep_file['id'], interval, keep_file['created_datetime'], window_start))
+                # why = "%s (%s > %s)" % (interval, str(keep_file['created_datetime']), str(window_start))
+                # keep_file['why'] = keep_file['why'] + [why] if 'why' in keep_file else [why]
+                # print("Keeping %s because of %s" % (keep_file['name'], why))
+            else:
+                print("Deleting %s because of %s (%s <= %s)" % (keep_file['name'], interval, keep_file['created_datetime'], window_start))
 
-    return sorted(keep.values(), key=lambda x: x.get('created_datetime'), reverse=True)
+    return sorted([x for x in matching_files if x.get('id') not in keep], key=lambda x: x.get('created_datetime'), reverse=True)
 
 class BackerUpper(object):
     def __init__(self, client_secrets, token_file):
@@ -304,8 +307,11 @@ def main(argv=None):
     # find old tarfiles
     old_files = backup_maker.find_files_in_folder(parent_folder_id)
     delete_list = find_deletion_candidates(old_files, '%s_' % backup_prefix, max_keep=keep_old, keep_policy=keep_policy)
-    if not args.dry_run:
-        backup_maker.delete_files(delete_list, trash=False)
+    if delete_list:
+        if args.dry_run:
+            print("Deleting the following: \n", "\n  ".join([x.get('name', '<unknown>') for x in delete_list]))
+        else:
+            backup_maker.delete_files(delete_list, trash=False)
 
     # create backup tarfile
     tarfile = datetime.datetime.now().strftime("%s_%%Y-%%m-%%d.tar.xz" % backup_prefix)
